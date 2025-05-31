@@ -105,3 +105,130 @@
         (ok true)
     )
 )
+
+
+(define-public (claim-funds (campaign-id uint))
+    (let
+        (
+            (campaign (unwrap! (map-get? campaigns { campaign-id: campaign-id }) 
+                     ERR-INVALID-CAMPAIGN))
+        )
+        (asserts! (is-valid-campaign campaign-id) ERR-INVALID-CAMPAIGN)
+        (asserts! (is-eq tx-sender (get owner campaign)) ERR-NOT-AUTHORIZED)
+        (asserts! (>= (get total-raised campaign) (get goal campaign)) ERR-GOAL-NOT-MET)
+        (asserts! (not (get claimed campaign)) ERR-ALREADY-CLAIMED)
+
+        (try! (as-contract (stx-transfer? 
+            (get total-raised campaign) 
+            tx-sender 
+            (get owner campaign))))
+
+        (map-set campaigns
+            { campaign-id: campaign-id }
+            (merge campaign { claimed: true, status: "completed" })
+        )
+        (ok true)
+    )
+)
+
+
+(define-public (refund (campaign-id uint))
+    (let
+        (
+            (campaign (unwrap! (map-get? campaigns { campaign-id: campaign-id }) 
+                     ERR-INVALID-CAMPAIGN))
+            (contribution (unwrap! (map-get? contributions 
+                { campaign-id: campaign-id, contributor: tx-sender }) 
+                ERR-NOT-AUTHORIZED))
+        )
+        (asserts! (is-valid-campaign campaign-id) ERR-INVALID-CAMPAIGN)
+        (asserts! (> stacks-block-height (get deadline campaign)) ERR-DEADLINE-PASSED)
+        (asserts! (< (get total-raised campaign) (get goal campaign)) ERR-GOAL-NOT-MET)
+
+        (try! (as-contract (stx-transfer? 
+            (get amount contribution) 
+            tx-sender 
+            tx-sender)))
+
+        (map-delete contributions { campaign-id: campaign-id, contributor: tx-sender })
+        (ok true)
+    )
+)
+
+
+(define-read-only (get-campaign-status (campaign-id uint))
+    (let
+        (
+            (campaign (unwrap! (map-get? campaigns { campaign-id: campaign-id })
+                     ERR-INVALID-CAMPAIGN))
+        )
+        (ok {
+            owner: (get owner campaign),
+            goal: (get goal campaign),
+            total-raised: (get total-raised campaign),
+            remaining-blocks: (- (get deadline campaign) stacks-block-height),
+            progress-percentage: (/ (* (get total-raised campaign) u100) (get goal campaign)),
+            is-active: (< stacks-block-height (get deadline campaign)),
+            is-successful: (>= (get total-raised campaign) (get goal campaign)),
+            is-claimed: (get claimed campaign)
+        })
+    )
+)
+
+
+(define-public (update-deadline (campaign-id uint) (new-deadline uint))
+    (let
+        (
+            (campaign (unwrap! (map-get? campaigns { campaign-id: campaign-id })
+                     ERR-INVALID-CAMPAIGN))
+        )
+        (asserts! (is-valid-campaign campaign-id) ERR-INVALID-CAMPAIGN)
+        (asserts! (is-eq tx-sender (get owner campaign)) ERR-NOT-AUTHORIZED)
+        (asserts! (> new-deadline stacks-block-height) ERR-INVALID-DEADLINE)
+        (asserts! (> new-deadline (get deadline campaign)) ERR-INVALID-DEADLINE)
+
+        (map-set campaigns
+            { campaign-id: campaign-id }
+            (merge campaign { deadline: new-deadline })
+        )
+        (ok true)
+    )
+)
+
+
+(define-read-only (get-contribution-history (campaign-id uint) (contributor principal))
+    (let
+        (
+            (contribution (unwrap! (map-get? contributions 
+                { campaign-id: campaign-id, contributor: contributor })
+                ERR-NO-CONTRIBUTION))
+        )
+        (ok {
+            amount: (get amount contribution),
+            timestamp: (get timestamp contribution),
+            campaign-id: campaign-id
+        })
+    )
+)
+
+
+(define-public (cancel-campaign (campaign-id uint))
+    (let
+        (
+            (campaign (unwrap! (map-get? campaigns { campaign-id: campaign-id })
+                     ERR-INVALID-CAMPAIGN))
+        )
+        (asserts! (is-valid-campaign campaign-id) ERR-INVALID-CAMPAIGN)
+        (asserts! (is-eq tx-sender (get owner campaign)) ERR-NOT-AUTHORIZED)
+        (asserts! (is-eq (get total-raised campaign) u0) ERR-CAMPAIGN-ACTIVE)
+
+        (map-set campaigns
+            { campaign-id: campaign-id }
+            (merge campaign { 
+                status: "cancelled",
+                deadline: stacks-block-height
+            })
+        )
+        (ok true)
+    )
+)
